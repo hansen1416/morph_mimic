@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MorphMimic: Morphology-Conditioned Physics-Based Motion Imitation Across 128 Body Shapes</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="hero">
+  <div class="container">
+    <p class="project-name">MorphMimic</p>
+    <h1>Morphology-Conditioned Physics-Based Motion Imitation<br>Across 128 Body Shapes</h1>
+    <p class="authors"><!-- TODO: authors + affiliations --> Author Name<sup>1</sup></p>
+    <p class="affil"><!-- TODO: affiliation --> Affiliation</p>
+
+    <div class="links">
+      <a class="btn" href="#" data-todo>Paper (arXiv, pending)</a>
+      <a class="btn" href="https://github.com/hansen1416/ProtoMotions">Code</a>
+      <a class="btn" href="#dataset">Dataset</a>
+      <a class="btn" href="#bibtex">BibTeX</a>
+    </div>
+  </div>
+</header>
+
+<main class="container">
+
+  <section class="stats">
+    <div class="stat"><span class="stat-num">20,951</span><span class="stat-label">clip identities</span></div>
+    <div class="stat"><span class="stat-num">128</span><span class="stat-label">body configurations</span></div>
+    <div class="stat"><span class="stat-num">2,681,728</span><span class="stat-label">motion variants</span></div>
+    <div class="stat"><span class="stat-num">98.47% / 99.14%</span><span class="stat-label">validation / test success</span></div>
+    <div class="stat"><span class="stat-num">28 / 32</span><span class="stat-label">unseen shapes generalize cleanly</span></div>
+  </section>
+
+  <section id="abstract">
+    <h2>Abstract</h2>
+    <p>
+      Physics-based motion imitation must accommodate both the diversity of human movement and
+      differences in body geometry and dynamics. We construct a text-associated, multi-morphology
+      motion corpus from AMASS-derived HumanML3D clips using HUMOS, pairing shape-specific
+      reference motions with matching SMPL-based simulation assets. The corpus contains 20,951
+      clip identities, including mirrored clips, across 128 body configurations, yielding
+      2,681,728 generated variants. Source captions remain associated metadata rather than
+      controller inputs. A contact-aware kinematic refinement procedure reduces reference
+      artifacts while retaining explicit limits on pose and root changes. We train one
+      morphology-conditioned policy directly on the refined multi-shape references, using
+      temporal slot/type attention and a streamed training pool. Deterministic, clip-grouped
+      splits and morphology-matched evaluation distinguish held-out motion tracking from
+      training-pool monitoring. Offline evaluation of the selected checkpoint reports 98.47%
+      success on the 1,048-clip validation split and 99.14% on the independent 1,048-clip test
+      split, each with one selected body configuration per clip and a capped horizon; these are
+      trained-body, one-shape-per-clip results, not all-shape or unseen-body tests. An eight-run
+      grid of four temporal architectures crossed with refined and unrefined references, on a
+      150-clip development set, selects temporal slot/type attention without adaLN-Zero. Residual
+      failures on both splits are analysed against inherited captions and concentrate on
+      ground-contact transitions and whole-body acrobatics. A separate analysis asks whether body
+      shape and motion type jointly set physical control demand, replaying the trained policy
+      across all 19,200 (clip, shape) pairs of the 150-clip development set: after correcting a
+      normalization artifact that would otherwise have produced a spurious positive result, we
+      find no statistically detectable evidence that highly dynamic motions are more
+      shape-sensitive than quasi-static ones for this checkpoint. A further test on 32 held-out
+      body shapes finds 28 of 32 track at trained-body levels with no decline across distance from
+      training, while the remaining 4 fail severely in a gender-flip pattern consistent with an
+      asset artifact rather than a genuine limit, reported as an open anomaly rather than averaged
+      away.
+    </p>
+  </section>
+
+  <section id="results">
+    <h2>Example rollouts</h2>
+    <p class="todo-note">Video/GIF examples of the trained policy across different body shapes
+      go here once rendered from the final checkpoint.</p>
+    <div class="video-grid placeholder">
+      <div class="video-slot">rollout example 1</div>
+      <div class="video-slot">rollout example 2</div>
+      <div class="video-slot">rollout example 3</div>
+    </div>
+  </section>
+
+  <section id="figures">
+    <h2>Figures</h2>
+    <p class="todo-note">Key figures from the paper (dataset construction, architecture, ablation
+      results) go here once exported as standalone images.</p>
+  </section>
+
+  <section id="dataset">
+    <h2>Dataset &amp; Code</h2>
+    <p>
+      The full multi-morphology motion corpus is derived from
+      <a href="https://amass.is.tue.mpg.de/">AMASS</a> via
+      <a href="https://github.com/EricGuo5513/HumanML3D">HumanML3D</a> clip identities and
+      <a href="https://virtualhumans.mpi-inf.mpg.de/humos/">HUMOS</a> shape-conditioned
+      generation. Per AMASS's license, the derived motion data is not redistributed directly here
+      &mdash; the full construction pipeline is released as code, so anyone with their own AMASS
+      access can regenerate the identical corpus.
+    </p>
+    <ul>
+      <li><strong>Code &amp; pipeline:</strong>
+        <a href="https://github.com/hansen1416/ProtoMotions">github.com/hansen1416/ProtoMotions</a></li>
+      <li><strong>Body-shape definitions &amp; simulation assets</strong> (the 128 SMPL
+        configurations and matching SMPLSim/MJCF assets &mdash; not AMASS-derived, freely
+        released): <span class="todo-note">link pending</span></li>
+      <li><strong>Trained checkpoint:</strong> <span class="todo-note">link pending</span></li>
+      <li><strong>Hosted motion data:</strong> pending permission from the AMASS license
+        holders (Max Planck Institute) to redistribute derived motion tensors.</li>
+    </ul>
+  </section>
+
+  <section id="bibtex">
+    <h2>BibTeX</h2>
+    <pre class="bibtex"><!-- TODO: fill in author, year, venue -->@misc{hansen2026morphology,
+  title  = {Morphology-Conditioned Physics-Based Motion Imitation Across 128 Body Shapes},
+  author = {TODO},
+  year   = {2026},
+  note   = {arXiv preprint, pending},
+}</pre>
+  </section>
+
+</main>
+
+<footer class="container">
+  <p>Built with ProtoMotions, HUMOS, and Isaac Gym.</p>
+</footer>
+
+</body>
+</html>
