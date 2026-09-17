@@ -18,6 +18,7 @@
     <div class="links">
       <a class="btn" href="#" data-todo>Paper (arXiv, pending)</a>
       <a class="btn" href="https://github.com/hansen1416/ProtoMotions">Code</a>
+      <a class="btn" href="#results">Videos</a>
       <a class="btn" href="#dataset">Dataset</a>
       <a class="btn" href="#bibtex">BibTeX</a>
     </div>
@@ -32,6 +33,39 @@
     <div class="stat"><span class="stat-num">2,681,728</span><span class="stat-label">motion variants</span></div>
     <div class="stat"><span class="stat-num">98.47% / 99.14%</span><span class="stat-label">validation / test success</span></div>
     <div class="stat"><span class="stat-num">28 / 32</span><span class="stat-label">unseen shapes generalize cleanly</span></div>
+  </section>
+
+  <section id="results">
+    <h2>128 body shapes, one clip, one policy</h2>
+    <p>Each video shows the same motion clip replayed across all 128 trained body shapes
+      simultaneously, one shared policy controlling every shape at once, camera slowly
+      orbiting the grid.</p>
+    <div class="video-grid">
+      <div class="video-item">
+        <video controls preload="metadata"
+          src="https://github.com/hansen1416/morph_mimic/releases/download/demo-videos/test_128shapes_orbit_M001062.mp4">
+        </video>
+        <p class="video-caption">Kick combo &mdash; two side kicks, a back kick, two round kicks</p>
+      </div>
+      <div class="video-item">
+        <video controls preload="metadata"
+          src="https://github.com/hansen1416/morph_mimic/releases/download/demo-videos/test_128shapes_orbit_M002534.mp4">
+        </video>
+        <p class="video-caption">Jump while spinning</p>
+      </div>
+      <div class="video-item">
+        <video controls preload="metadata"
+          src="https://github.com/hansen1416/morph_mimic/releases/download/demo-videos/test_128shapes_orbit_008912.mp4">
+        </video>
+        <p class="video-caption">Salsa dance</p>
+      </div>
+      <div class="video-item">
+        <video controls preload="metadata"
+          src="https://github.com/hansen1416/morph_mimic/releases/download/demo-videos/test_128shapes_orbit_M014401.mp4">
+        </video>
+        <p class="video-caption">Macarena</p>
+      </div>
+    </div>
   </section>
 
   <section id="abstract">
@@ -66,17 +100,6 @@
       asset artifact rather than a genuine limit, reported as an open anomaly rather than averaged
       away.
     </p>
-  </section>
-
-  <section id="results">
-    <h2>Example rollouts</h2>
-    <p class="todo-note">Video/GIF examples of the trained policy across different body shapes
-      go here once rendered from the final checkpoint.</p>
-    <div class="video-grid placeholder">
-      <div class="video-slot">rollout example 1</div>
-      <div class="video-slot">rollout example 2</div>
-      <div class="video-slot">rollout example 3</div>
-    </div>
   </section>
 
   <section id="figures">

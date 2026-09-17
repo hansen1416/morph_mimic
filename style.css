@@ -150,21 +150,30 @@ h2 {
 
 .video-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 12px;
-  margin-top: 1em;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 16px;
+  margin-top: 1.2em;
 }
 
-.video-slot {
+@media (max-width: 640px) {
+  .video-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.video-item video {
+  display: block;
+  width: 100%;
   aspect-ratio: 16 / 9;
-  background: var(--bg-alt);
-  border: 1px dashed var(--border);
+  background: #000;
   border-radius: 8px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--text-muted);
+}
+
+.video-caption {
+  margin: 0.5em 0 0;
   font-size: 0.85rem;
+  color: var(--text-muted);
+  text-align: center;
 }
 
 ul { padding-left: 1.3em; }
