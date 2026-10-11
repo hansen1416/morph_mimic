@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="description" content="Shared physics-based motion tracking across 128 trained body configurations, with inside/outside unseen-body evaluation and network-design comparisons.">
 <title>MorphMimic: Morphology-Conditioned Physics-Based Motion Imitation Across 128 Body Shapes</title>
 <link rel="stylesheet" href="style.css">
 </head>
@@ -22,9 +23,10 @@
     <p class="affil">University of Brighton</p>
 
     <div class="links">
-      <a class="btn" href="#" data-todo>Paper (arXiv, pending)</a>
+      <span class="btn btn-pending">Paper forthcoming</span>
       <a class="btn" href="https://github.com/hansen1416/ProtoMotions">Code</a>
       <a class="btn" href="#results">Videos</a>
+      <a class="btn" href="#evaluation">Evaluation</a>
       <a class="btn" href="#dataset">Dataset</a>
       <a class="btn" href="#bibtex">BibTeX</a>
     </div>
@@ -37,75 +39,185 @@
     <div class="stat"><span class="stat-num">20,951</span><span class="stat-label">clip identities</span></div>
     <div class="stat"><span class="stat-num">128</span><span class="stat-label">body configurations</span></div>
     <div class="stat"><span class="stat-num">2,681,728</span><span class="stat-label">motion variants</span></div>
-    <div class="stat"><span class="stat-num">98.47% / 99.14%</span><span class="stat-label">validation / test success</span></div>
-    <div class="stat"><span class="stat-num">28 / 32</span><span class="stat-label">unseen shapes generalize cleanly</span></div>
+    <div class="stat"><span class="stat-num">98.47% / 99.14%</span><span class="stat-label">validation / test: one trained body per clip</span></div>
+    <div class="stat"><span class="stat-num">97.28% / 97.15%</span><span class="stat-label">inside / outside unseen-body success</span></div>
   </section>
 
   <section id="results">
     <h2>128 body shapes, one clip, one policy</h2>
     <p>Each video shows the same motion clip replayed across all 128 trained body shapes
       simultaneously, one shared policy controlling every shape at once, camera slowly
-      orbiting the grid.</p>
+      orbiting the grid. These are trained-body demonstrations, not the new unseen-body panels.
+      They illustrate simultaneous execution; they do not separately show the reference or
+      measure sliding and penetration.</p>
     <div class="video-grid">
       <div class="video-item">
         <video controls preload="metadata"
           src="https://github.com/hansen1416/morph_mimic/releases/download/demo-videos/test_128shapes_orbit_M001062.mp4">
         </video>
-        <p class="video-caption">Kick combo, two side kicks, a back kick, two round kicks</p>
+        <p class="video-caption">Kick combo, two side kicks, a back kick, two round kicks <span class="clip-id">(clip M001062)</span></p>
       </div>
       <div class="video-item">
         <video controls preload="metadata"
           src="https://github.com/hansen1416/morph_mimic/releases/download/demo-videos/test_128shapes_orbit_M002534.mp4">
         </video>
-        <p class="video-caption">Jump while spinning</p>
+        <p class="video-caption">Jump while spinning <span class="clip-id">(clip M002534)</span></p>
       </div>
       <div class="video-item">
         <video controls preload="metadata"
           src="https://github.com/hansen1416/morph_mimic/releases/download/demo-videos/test_128shapes_orbit_008912.mp4">
         </video>
-        <p class="video-caption">Salsa dance</p>
+        <p class="video-caption">Salsa dance <span class="clip-id">(clip 008912)</span></p>
       </div>
       <div class="video-item">
         <video controls preload="metadata"
           src="https://github.com/hansen1416/morph_mimic/releases/download/demo-videos/test_128shapes_orbit_M014401.mp4">
         </video>
-        <p class="video-caption">Macarena</p>
+        <p class="video-caption">Macarena <span class="clip-id">(clip M014401)</span></p>
       </div>
     </div>
   </section>
 
   <section id="abstract">
     <h2>Abstract</h2>
-    <p>
-      Physics-based motion imitation must accommodate both the diversity of human movement and
-      differences in body geometry and dynamics. We construct a text-associated, multi-morphology
-      motion corpus from AMASS-derived HumanML3D clips using HUMOS, pairing shape-specific
-      reference motions with matching SMPL-based simulation assets. The corpus contains 20,951
-      clip identities, including mirrored clips, across 128 body configurations, yielding
-      2,681,728 generated variants. Source captions remain associated metadata rather than
-      controller inputs. A contact-aware kinematic refinement procedure reduces reference
-      artifacts while retaining explicit limits on pose and root changes. We train one
-      morphology-conditioned policy directly on the refined multi-shape references, using
-      temporal slot/type attention and a streamed training pool. Deterministic, clip-grouped
-      splits and morphology-matched evaluation distinguish held-out motion tracking from
-      training-pool monitoring. Offline evaluation of the selected checkpoint reports 98.47%
-      success on the 1,048-clip validation split and 99.14% on the independent 1,048-clip test
-      split, each with one selected body configuration per clip and a capped horizon; these are
-      trained-body, one-shape-per-clip results, not all-shape or unseen-body tests. An eight-run
-      grid of four temporal architectures crossed with refined and unrefined references, on a
-      150-clip development set, selects temporal slot/type attention without adaLN-Zero. Residual
-      failures on both splits are analysed against inherited captions and concentrate on
-      ground-contact transitions and whole-body acrobatics. A separate analysis asks whether body
-      shape and motion type jointly set physical control demand, replaying the trained policy
-      across all 19,200 (clip, shape) pairs of the 150-clip development set: after correcting a
-      normalization artifact that would otherwise have produced a spurious positive result, we
-      find no statistically detectable evidence that highly dynamic motions are more
-      shape-sensitive than quasi-static ones for this checkpoint. A further test on 32 held-out
-      body shapes finds 28 of 32 track at trained-body levels with no decline across distance from
-      training, while the remaining 4 fail severely in a gender-flip pattern consistent with an
-      asset artifact rather than a genuine limit, reported as an open anomaly rather than averaged
-      away.
-    </p>
+    <p>Animating digital humans with different body proportions requires references consistent
+      with their geometry and a controller that tracks them in physics. We study shared tracking,
+      unseen-body transfer, and network-design trade-offs using one morphology-conditioned temporal
+      controller. A paired corpus links 20,951 motion identities to body-conditioned references and
+      matching simulation assets for 128 body configurations; training uses 18,855 identities across
+      all bodies. The controller achieves 99.14% tracking success on 1,048 held-out motions, with one
+      selected trained body per clip. On 233 training-split clips replayed across each of two
+      128-body unseen panels, success is 97.28% inside the training coefficient range and 97.15%
+      outside it. These averages coexist with individual-body success as low as 3.0% and 13.3%,
+      respectively. A later checkpoint improves outside-panel success but introduces substantial
+      individual regressions. Three-seed comparisons of temporal multilayer perceptron and attention
+      architectures reveal trade-offs between tracking and smoothness. An offline reference audit
+      measures reduced stance-foot sliding and below-floor body centres with small pose changes,
+      at the cost of increased reference jerk. These reference measurements are distinct from
+      simulated tracking accuracy and smoothness; rollout sliding and penetration have not been
+      quantified. The results demonstrate strong average shared tracking and transfer within the
+      evaluated domain, while leaving all-body held-out-motion coverage, the causal contribution of
+      explicit morphology inputs, and severe failure mechanisms unresolved.</p>
+  </section>
+
+
+  <section id="evaluation">
+    <h2>Three research questions</h2>
+    <ol class="research-questions">
+      <li><strong>RQ1 — Shared tracking:</strong> can one controller track diverse motions across bodies?
+        The held-out test evaluates 1,048 clips with one trained body per clip; the trained-body
+        control crosses 150 training clips with all 128 trained bodies.</li>
+      <li><strong>RQ2 — Unseen-body transfer:</strong> how well does that capability generalise to new
+        body shapes, and where does it fail? Each unseen panel crosses 233 known motion identities
+        with 128 new bodies, retaining every body and failure.</li>
+      <li><strong>RQ3 — Network design and reference quality:</strong> how do temporal MLP, attention,
+        slot/type embeddings and adaLN-Zero compare, and what trade-offs accompany refinement?</li>
+    </ol>
+
+    <h3>Tracking and unseen-body results</h3>
+    <p>Success requires peak mean body-position error no greater than 0.5 m over the evaluated
+      horizon. This is a tracking criterion, not a certification of visual realism. Unseen-body
+      results were recorded on 9 October 2026.</p>
+    <div class="table-scroll" role="region" aria-label="Tracking results" tabindex="0">
+      <table>
+        <caption>Evaluation populations and original-checkpoint success</caption>
+        <thead><tr><th scope="col">Population</th><th scope="col">Motion / body exposure</th><th scope="col">Pairs</th><th scope="col">Success</th></tr></thead>
+        <tbody>
+          <tr><th scope="row">Validation</th><td>Held-out clips; one trained body per clip</td><td>1,048</td><td>98.47%</td></tr>
+          <tr><th scope="row">Test</th><td>Held-out clips; one trained body per clip</td><td>1,048</td><td>99.14%</td></tr>
+          <tr><th scope="row">Trained-body control</th><td>150 training clips × 128 trained bodies</td><td>19,200</td><td>99.29%</td></tr>
+          <tr><th scope="row">Inside unseen</th><td>233 training clips × 128 unseen bodies</td><td>29,824</td><td>97.28%</td></tr>
+          <tr><th scope="row">Outside unseen</th><td>233 training clips × 128 unseen bodies</td><td>29,824</td><td>97.15%</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="evidence-note">Inside coefficient vectors lie in [−3, 3]<sup>10</sup>; outside
+      vectors have max |β| in (3, 5]. Each panel has 64 vectors on two body templates.
+      “Inside” refers to the coefficient box, not a demonstrated convex hull. The control uses
+      different clips and a different refinement run, so its gap from unseen results is descriptive.</p>
+    <p><strong>Average transfer is not uniform robustness.</strong> The lowest original-checkpoint
+      body success is 3.0% inside and 13.3% outside. Outside-tier success is
+      99.03%, 97.76%, 95.33% and 96.47%, rather than a monotonic decline with coefficient distance.</p>
+
+    <div class="table-scroll" role="region" aria-label="Checkpoint comparison" tabindex="0">
+      <table>
+        <caption>Later full-data checkpoint versus the original refined checkpoint</caption>
+        <thead><tr><th scope="col">Panel</th><th scope="col">Original</th><th scope="col">Later</th><th scope="col">Change, pp [95% CI]</th></tr></thead>
+        <tbody>
+          <tr><th scope="row">Inside unseen</th><td>97.28%</td><td>96.91%</td><td>−0.37 [−0.57, −0.18]</td></tr>
+          <tr><th scope="row">Outside unseen</th><td>97.15%</td><td>97.57%</td><td>+0.42 [+0.22, +0.61]</td></tr>
+          <tr><th scope="row">Trained control</th><td>99.29%</td><td>99.12%</td><td>−0.17 [−0.37, −0.03]</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="evidence-note">Original: epoch 28,170; later: epoch 34,000. Training duration and
+      motion exposure change together; this is a checkpoint comparison, not an isolated treatment.
+      Confidence intervals resample clips while holding the body panel fixed. The unseen headline
+      excludes 23 validation/test identities seen by the later checkpoint. A repeat of the original
+      checkpoint changes headline success by at most 0.04 percentage points, but is not a training-seed replicate.</p>
+
+    <h3>Network comparison</h3>
+    <div class="table-scroll" role="region" aria-label="Architecture results" tabindex="0">
+      <table>
+        <caption>Refined-reference development comparison: mean ± sample SD across three seeds</caption>
+        <thead><tr><th scope="col">Architecture</th><th scope="col">Success (%)</th><th scope="col">Position (m)</th><th scope="col">Rotation (rad)</th><th scope="col">Jerk score</th></tr></thead>
+        <tbody>
+          <tr><th scope="row">Temporal MLP</th><td>95.14 ± 2.07</td><td>0.118</td><td>0.216</td><td>2,110 ± 643</td></tr>
+          <tr><th scope="row">Temporal attention</th><td>97.56 ± 0.34</td><td>0.090</td><td>0.218</td><td>2,783 ± 887</td></tr>
+          <tr><th scope="row">Slot/type attention</th><td>97.89 ± 0.22</td><td>0.090</td><td>0.219</td><td>2,413 ± 762</td></tr>
+          <tr><th scope="row">Slot/type + adaLN-Zero</th><td>97.17 ± 0.08</td><td>0.083</td><td>0.211</td><td>2,659 ± 674</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="evidence-note">Each seed is summarized over its last eight evaluations at a matched
+      6,000-epoch budget on 150 training clips × 128 bodies. Position and rotation are across-seed
+      means. Lower errors and jerk are better under the fixed evaluator convention; capacities
+      differ. All networks receive morphology inputs. These supporting reruns do not establish
+      statistical superiority or isolate the effect of explicit morphology conditioning.</p>
+
+    <h3>Reference quality versus simulated motion</h3>
+    <div class="table-scroll" role="region" aria-label="Reference refinement results" tabindex="0">
+      <table>
+        <caption>Offline reference audit: 19,200 development references, with no simulation</caption>
+        <thead><tr><th scope="col">Measurement</th><th scope="col">Before</th><th scope="col">After</th></tr></thead>
+        <tbody>
+          <tr><th scope="row">Stance-foot horizontal speed</th><td>0.055 m/s</td><td>0.038 m/s</td></tr>
+          <tr><th scope="row">Frames with lowest body centre below floor</th><td>39.6%</td><td>3.3%</td></tr>
+          <tr><th scope="row">Raw position jerk</th><td>45.2 m/s³</td><td>60.7 m/s³</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>Mean reference changes are 0.12° in body rotation and 0.008 m in horizontal root position;
+      the cross-shape knee-range variance ratio is 0.94. Refinement reduces the measured reference
+      artifacts but increases reference jerk. Below-floor body centres are not mesh-penetration
+      measurements. Raw reference jerk and the simulated normalized-jerk score have different definitions.</p>
+    <p>The held-out test measures simulated body-position error of 0.0676 m, rotation error of
+      0.1723 rad and normalized jerk of 1,050.9. Simulated sliding and penetration have not been
+      quantified. All-body held-out-motion coverage and controlled reference-versus-simulation
+      visual comparisons remain open.</p>
+  </section>
+
+  <section id="related">
+    <h2>Published capabilities and our contribution</h2>
+    <p>These sources describe capabilities and evaluation scope, not directly comparable
+      performance. No external tracker has been rerun on our matched references, assets and protocol.</p>
+    <div class="table-scroll" role="region" aria-label="Related system capabilities" tabindex="0">
+      <table>
+        <caption>Primary-source capability comparison</caption>
+        <thead><tr><th scope="col">System</th><th scope="col">Published capability</th><th scope="col">Relation to this study</th></tr></thead>
+        <tbody>
+          <tr><th scope="row"><a href="https://openaccess.thecvf.com/content/ICCV2023/html/Luo_Perpetual_Humanoid_Control_for_Real-time_Simulated_Avatars_ICCV_2023_paper.html">PHC</a></th><td>Reference tracking and recovery; sampled SMPL shape/gender variation described.</td><td>Quantitative motion comparisons use the mean neutral body. Shape support should not be confused with a systematic inside/outside unseen-body benchmark.</td></tr>
+          <tr><th scope="row"><a href="https://arxiv.org/abs/2205.01906v2">ASE</a></th><td>Reusable adversarial skill embeddings and downstream task control.</td><td>Exact clip tracking is not its objective; the published study does not report our shape-conditioned tracking panel.</td></tr>
+          <tr><th scope="row"><a href="https://github.com/NVlabs/ProtoMotions">ProtoMotions 3</a></th><td>Framework documentation covers tracking, distributed training, retargeting and multiple character configurations.</td><td>A software capability source, not a matched benchmark. Our simulation, PPO and motion-imitation infrastructure is inherited from ProtoMotions.</td></tr>
+          <tr><th scope="row"><a href="https://doi.org/10.1145/3355089.3356499">Won &amp; Lee</a></th><td>Parametric physics-based control across height, weight and proportion changes.</td><td>Direct prior body-control capability; our contribution is not the invention of morphology conditioning.</td></tr>
+          <tr><th scope="row"><a href="https://virtualhumans.mpi-inf.mpg.de/humos/">HUMOS</a></th><td>Identity-conditioned motion generation with physical-consistency objectives.</td><td>Our pretrained reference generator, rather than a directly comparable online feedback tracker.</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>Our additions are paired corpus assembly and identity checks, reference processing and its
+      fidelity audit, the evaluated temporal controller configuration, streamed clip residency,
+      and evaluation that separates motion exposure from body exposure. SMPL/SMPLSim, HUMOS and
+      ProtoMotions provide the underlying body models, generation and learning infrastructure.</p>
   </section>
 
   <section id="pipeline">
@@ -253,19 +365,19 @@
       <a href="https://amass.is.tue.mpg.de/">AMASS</a> via
       <a href="https://github.com/EricGuo5513/HumanML3D">HumanML3D</a> clip identities and
       <a href="https://virtualhumans.mpi-inf.mpg.de/humos/">HUMOS</a> shape-conditioned
-      generation. Per AMASS's license, the derived motion data is not redistributed directly here
-      &mdash; the full construction pipeline is released as code, so anyone with their own AMASS
-      access can regenerate the identical corpus.
+      generation. Derived motion tensors are not redistributed here; use remains subject to the
+      source datasets' access and licensing conditions. The research code repository is linked
+      below. An archival version, evaluated checkpoints, asset release and generation checksums
+      are needed for a complete reproducibility package.
     </p>
     <ul>
       <li><strong>Code &amp; pipeline:</strong>
         <a href="https://github.com/hansen1416/ProtoMotions">github.com/hansen1416/ProtoMotions</a></li>
-      <li><strong>Body-shape definitions &amp; simulation assets</strong> (the 128 SMPL
-        configurations and matching SMPLSim/MJCF assets &mdash; not AMASS-derived, freely
-        released): <span class="todo-note">link pending</span></li>
+      <li><strong>Body-shape definitions &amp; evaluated simulation assets:</strong>
+        <span class="todo-note">release link and access conditions pending</span></li>
       <li><strong>Trained checkpoint:</strong> <span class="todo-note">link pending</span></li>
-      <li><strong>Hosted motion data:</strong> pending permission from the AMASS license
-        holders (Max Planck Institute) to redistribute derived motion tensors.</li>
+      <li><strong>Motion data and evaluation archive:</strong> access and redistribution arrangements
+        have not yet been specified; no unrestricted derived-data release is claimed.</li>
     </ul>
   </section>
 
@@ -276,7 +388,7 @@
   author = {Han, Hansen and Farrington-Wheeler, Beck and Mubarak, Awes and
             Baimagambetov, Almas and Polatidis, Nikolaos},
   year   = {2026},
-  note   = {arXiv preprint, pending},
+  note   = {Manuscript in preparation},
 }</pre>
   </section>
 

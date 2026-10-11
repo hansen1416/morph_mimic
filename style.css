@@ -208,3 +208,25 @@ footer {
 }
 
 a { color: var(--accent); }
+
+/* Evidence tables: readable on desktop, independently scrollable on mobile. */
+h3 { margin-top: 1.8em; line-height: 1.35; }
+.btn-pending { background: var(--border); color: var(--text-muted); }
+.btn:focus-visible, a:focus-visible, .table-scroll:focus-visible {
+  outline: 3px solid var(--accent); outline-offset: 3px;
+}
+.table-scroll { overflow-x: auto; margin: 1.2em 0; border: 1px solid var(--border); border-radius: 8px; }
+table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+caption { text-align: left; padding: 0.9em; font-weight: 600; background: var(--bg-alt); }
+th, td { text-align: left; vertical-align: top; padding: 0.75em; border-bottom: 1px solid var(--border); }
+thead th { background: var(--accent-bg); }
+tbody th { font-weight: 600; }
+tbody tr:last-child > * { border-bottom: none; }
+.evidence-note { color: var(--text-muted); font-size: 0.9rem; }
+.clip-id { white-space: nowrap; }
+@media (max-width: 600px) {
+  .hero { padding-block: 2em 1.5em; }
+  .hero h1 { font-size: 1.35rem; }
+  table { min-width: 620px; }
+  #abstract p { text-align: left; }
+}
