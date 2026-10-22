@@ -1,21 +1,11 @@
-<!--
-DRAFT 2026-10-20. Remove this block before release.
-Open items:
-- arXiv link and BibTeX, once the preprint is up
-- Hugging Face checkpoint link; decide whether epoch 34,000 is released as well
-- SMPL-shape assets are shipped with SMPL-Body attribution (decided 2026-10-21); ask Max Planck to confirm in the same request as the AMASS consent
-- corpus section: update when the Max Planck consent question is settled
-- run every command below on a pod; the `--overrides motion_lib.r2_source=...` form is unverified
--->
-
 # MorphMimic
 
 **Physics-Based Motion Imitation for Diverse Human Body Shapes**
 
-Longzhen Han, Beck Farrington-Wheeler, Sajjad Hussain, Almas Baimagambetov, Nikolaos Polatidis
+Longzhen Han, Beck Farrington-Wheeler, Sajjad Hussain, Awes Mubarak, Almas Baimagambetov, Nikolaos Polatidis
 University of Brighton
 
-[Project page](https://hansen1416.github.io/morph_mimic/) | Paper: coming soon (arXiv) | Checkpoint: coming soon (Hugging Face)
+[Project page](https://hansen1416.github.io/morph_mimic/) | Paper: coming soon (arXiv) | [Checkpoint](https://huggingface.co/YugoAmaryl/morph-mimic) (Hugging Face)
 
 MorphMimic is one policy that tracks motion references on 128 SMPL body shapes in physics simulation. This repository contains the code to prepare references, train the policy and evaluate it, as used for the paper. It is derived from [ProtoMotions](https://github.com/NVlabs/ProtoMotions) and runs on Isaac Gym only (see [NOTICE](NOTICE) and [MODIFICATIONS.md](MODIFICATIONS.md)).
 
@@ -118,7 +108,7 @@ Without the corpus, the evaluators and the training commands cannot run; the che
 
 ## Checkpoints
 
-The MorphMimic checkpoint (epoch 28,170) will be on Hugging Face: link coming soon. SHA-256 of `last.ckpt`:
+The MorphMimic checkpoint (epoch 28,170) is on [Hugging Face](https://huggingface.co/YugoAmaryl/morph-mimic) under a non-commercial licence (CC BY-NC 4.0). SHA-256 of `last.ckpt`:
 
 ```
 4b83f20c93bf95fab389fc8935685ef8a2c7e46583f765e8c802421edb4479cb
@@ -132,7 +122,7 @@ The paper reference will be added when the arXiv version is available. Until the
 @misc{han2026morphmimic,
   title  = {MorphMimic: Physics-Based Motion Imitation for Diverse Human Body Shapes},
   author = {Han, Longzhen and Farrington-Wheeler, Beck and Hussain, Sajjad and
-            Baimagambetov, Almas and Polatidis, Nikolaos},
+            Mubarak, Awes and Baimagambetov, Almas and Polatidis, Nikolaos},
   year   = {2026},
   note   = {Preprint, link to follow}
 }

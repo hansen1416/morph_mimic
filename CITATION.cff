@@ -1,4 +1,3 @@
-# DRAFT 2026-10-20. Update the preferred citation when the arXiv version is available.
 cff-version: 1.2.0
 message: "If you use this software, please cite it using the metadata below."
 title: "MorphMimic: Physics-Based Motion Imitation for Diverse Human Body Shapes"
@@ -13,6 +12,9 @@ authors:
   - family-names: Hussain
     given-names: Sajjad
     affiliation: "University of Brighton"
+  - family-names: Mubarak
+    given-names: Awes
+    affiliation: "University of Brighton"
   - family-names: Baimagambetov
     given-names: Almas
     affiliation: "University of Brighton"
@@ -21,6 +23,7 @@ authors:
     affiliation: "University of Brighton"
 repository-code: "https://github.com/hansen1416/morph_mimic"
 url: "https://hansen1416.github.io/morph_mimic/"
+repository-artifact: "https://huggingface.co/YugoAmaryl/morph-mimic"
 license: Apache-2.0
 keywords:
   - physics-based character animation
