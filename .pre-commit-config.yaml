@@ -1,0 +1,79 @@
+# See https://pre-commit.com for more information
+# See https://pre-commit.com/hooks.html for more hooks
+
+# Common exclude pattern matching .gitignore
+exclude: |
+  (?x)^(
+    \.idea/.*|
+    \.vscode/.*|
+    .*__pycache__.*|
+    .*\.egg-info/.*|
+    outputs/.*|
+    output/.*|
+    rendered_images/.*|
+    .*tmp.*|
+    results/.*|
+    exps/.*|
+    wandb/.*|
+    newton_source/.*|
+    env_isaaclab/.*
+  )$
+
+repos:
+  # License header: the Apache-2.0 text comes from .license-header.txt. It is looked for in the
+  # first 10 lines, so the SPDX copyright lines above it may name different holders (the
+  # ProtoMotions Developers, this work's author, or both). Those lines are checked below.
+  - repo: https://github.com/Lucas-C/pre-commit-hooks
+    rev: v1.5.5
+    hooks:
+      - id: insert-license
+        name: Insert Apache license text (Python)
+        files: \.py$
+        args:
+          - --license-filepath=.license-header.txt
+          - --comment-style=#
+          - --detect-license-in-X-top-lines=10
+          - --no-extra-eol
+        exclude: setup\.py$
+
+  # Every Python file starts with an SPDX copyright line, optionally more, then the identifier.
+  - repo: local
+    hooks:
+      - id: spdx-header
+        name: Check SPDX copyright and license lines (Python)
+        language: pygrep
+        entry: '\A(#![^\n]*\r?\n)?# SPDX-FileCopyrightText: Copyright \(c\) [0-9]{4}(-[0-9]{4})? [^\n]+\r?\n(# SPDX-FileCopyrightText: [^\n]+\r?\n)*# SPDX-License-Identifier: Apache-2.0\r?\n'
+        args: [--multiline, --negate]
+        files: \.py$
+        exclude: setup\.py$
+
+  # Ruff linter and formatter
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.8.1
+    hooks:
+      - id: ruff
+        name: Ruff linter
+        types: [python]
+        args: [--fix, --exit-non-zero-on-fix]
+      - id: ruff-format
+        name: Ruff formatter
+        types: [python]
+
+  # Typos spell checker
+  - repo: https://github.com/crate-ci/typos
+    rev: v1.28.1
+    hooks:
+      - id: typos
+        types: [python]
+
+  # General pre-commit hooks
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+        types: [python]
+      - id: end-of-file-fixer
+        types: [python]
+      - id: check-yaml
+      - id: check-added-large-files
+        args: ['--maxkb=1000']

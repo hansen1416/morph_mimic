@@ -1,0 +1,383 @@
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026 The ProtoMotions Developers
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+"""Mimic control component for motion tracking tasks.
+
+This component manages reference motion tracking, including:
+- Motion manager for motion library sampling and playback
+- Reference state computation and terrain correction
+- Masked mimic conditioning state
+- Visualization markers for target poses
+"""
+
+from dataclasses import dataclass
+from typing import Dict, List, Tuple, Union, TYPE_CHECKING
+
+import torch
+from torch import Tensor
+
+from protomotions.envs.context_views import EnvContext, MimicContext
+from protomotions.envs.control.base import ControlComponent, ControlComponentConfig
+from protomotions.envs.obs.humanoid import dof_to_local
+from protomotions.simulator.base_simulator.config import (
+    MarkerConfig,
+    VisualizationMarkerConfig,
+    MarkerState,
+)
+from protomotions.simulator.base_simulator.simulator_state import (
+    RobotState,
+    StateConversion,
+)
+
+if TYPE_CHECKING:
+    from protomotions.envs.base_env.env import BaseEnv
+
+
+@dataclass
+class MimicControlConfig(ControlComponentConfig):
+    """Configuration for mimic control component.
+    
+    Attributes:
+        bootstrap_on_episode_end: If True, don't terminate when motion clip ends.
+        future_steps: Future reference poses to provide in context. If int N,
+            provides N consecutive steps (1 to N). If list, provides specific step
+            indices (e.g., [1, 3, 5, 9, 15] for non-uniform sampling).
+        window_back_steps: Steps backward (in units of env_dt) the REWARD-computation
+            window may search for a phase-tolerant match. 0 (default) = no window;
+            reward uses the exact nominal frame, identical to prior behavior.
+            Termination and evaluator components always use the exact nominal frame
+            regardless of this setting -- only reward factories that bind to
+            `EnvContext.mimic.reward_ref_state` are affected.
+        window_fwd_steps: Steps forward (in units of env_dt) the REWARD-computation
+            window may search. 0 (default) = no forward search.
+    """
+    _target_: str = "protomotions.envs.control.mimic_control.MimicControl"
+
+    bootstrap_on_episode_end: bool = True
+    future_steps: Union[int, List[int]] = 1
+    window_back_steps: int = 0
+    window_fwd_steps: int = 0
+
+
+class MimicControl(ControlComponent):
+    """Control component for motion tracking tasks.
+    
+    Provides context for mimic observations and rewards. Accesses the env's
+    motion_manager rather than creating its own.
+    """
+    
+    config: MimicControlConfig
+    
+    def __init__(self, config: MimicControlConfig, env: "BaseEnv"):
+        """Initialize mimic control component.
+        
+        Args:
+            config: Component configuration.
+            env: Parent environment instance.
+        """
+        super().__init__(config, env)
+    
+    def step(self):
+        """Control component step - motion manager is handled by env."""
+        # Motion manager is updated by env.post_physics_step if needed
+        pass
+    
+    def check_resets_and_terminations(self) -> Tuple[Tensor, Tensor]:
+        """Check if motion clips have finished.
+        
+        Returns:
+            Tuple of (reset_buf, terminate_buf) boolean tensors.
+        """
+        device = self.env.device
+        num_envs = self.env.num_envs
+        
+        # Check if motion clip has finished (access via env)
+        done_clip = self.env.motion_manager.get_done_tracks()
+        reset_buf = done_clip
+        
+        # Only terminate if not bootstrapping
+        if self.config.bootstrap_on_episode_end:
+            terminate_buf = torch.zeros(num_envs, dtype=torch.bool, device=device)
+        else:
+            terminate_buf = done_clip
+        
+        return reset_buf, terminate_buf
+    
+    def populate_context(self, ctx: EnvContext) -> None:
+        """Populate mimic-specific view in the EnvContext.
+        
+        Creates a MimicContext with:
+        - ref_state: Single-step reference state at current time (for rewards)
+        - future_*: Multi-step future reference poses [envs, future_steps, ...]
+        
+        Args:
+            ctx: The EnvContext to populate with ctx.mimic.
+        """
+        num_envs = self.env.num_envs
+        device = self.env.device
+        motion_ids = self.env.motion_manager.motion_ids
+        motion_times = self.env.motion_manager.motion_times
+        
+        # Get single-step reference state at current time (for rewards)
+        ref_state = self.env.motion_lib.get_motion_state(motion_ids, motion_times)
+
+        # Per-env data-source tag for source-switched rewards (note/README.note.md
+        # Section 67). None when the loaded MotionLib carries no such metadata --
+        # only experiments that bind motion_source_id in a reward factory need it.
+        motion_source_id = (
+            self.env.motion_lib.get_motion_source_id(motion_ids)
+            if getattr(self.env.motion_lib, "motion_source_id", None) is not None
+            else None
+        )
+        
+        # Apply terrain height correction to reference state
+        ref_gt = ref_state.rigid_body_pos.clone()
+        ref_gt += self.env.get_spawn_to_ref_pose_offset_with_terrain_height_correction(
+            ref_gt
+        )
+        ref_state.rigid_body_pos = ref_gt
+        
+        # Build multi-step reference for observations
+        dt = self.env.dt
+        if isinstance(self.config.future_steps, int):
+            step_indices = list(range(1, self.config.future_steps + 1))
+        else:
+            step_indices = self.config.future_steps
+        future_steps = len(step_indices)
+        
+        time_offsets = dt * torch.tensor(step_indices, device=device, dtype=torch.float32)
+        future_times = motion_times.unsqueeze(-1) + time_offsets  # [envs, N]
+        
+        motion_lengths = self.env.motion_lib.get_motion_length(motion_ids)
+        future_times = torch.minimum(future_times, motion_lengths.unsqueeze(-1))
+        
+        flat_motion_ids = motion_ids.unsqueeze(-1).expand(
+            num_envs, future_steps
+        ).reshape(-1)
+        flat_future_times = future_times.reshape(-1)
+        
+        # Query motion lib for all future steps
+        future_state = self.env.motion_lib.get_motion_state(
+            flat_motion_ids, flat_future_times
+        )
+        
+        # Reshape to [envs, future_steps, ...] and apply terrain correction
+        num_bodies = future_state.rigid_body_pos.shape[1]
+        num_dofs = future_state.dof_pos.shape[1]
+        
+        # Body positions with terrain correction
+        future_pos = future_state.rigid_body_pos.view(
+            num_envs, future_steps, num_bodies, 3
+        ).clone()
+        offset = self.env.get_spawn_to_ref_pose_offset_with_terrain_height_correction(
+            future_pos[:, 0, :, :]  # Use first step for offset
+        )
+        future_pos += offset.unsqueeze(1)
+        
+        # Body rotations
+        future_rot = future_state.rigid_body_rot.view(
+            num_envs, future_steps, num_bodies, 4
+        )
+        
+        # Body velocities
+        future_vel = future_state.rigid_body_vel.view(
+            num_envs, future_steps, num_bodies, 3
+        )
+        
+        # Body angular velocities
+        future_ang_vel = future_state.rigid_body_ang_vel.view(
+            num_envs, future_steps, num_bodies, 3
+        )
+        
+        # DOF positions and velocities
+        future_dof_pos = future_state.dof_pos.view(
+            num_envs, future_steps, num_dofs
+        )
+        future_dof_vel = future_state.dof_vel.view(
+            num_envs, future_steps, num_dofs
+        )
+        
+        hinge_axes_map = self.env.robot_config.kinematic_info.hinge_axes_map
+        ref_lr = dof_to_local(ref_state.dof_pos, hinge_axes_map, True)
+
+        # Reward-computation reference: exact nominal frame by default, or a
+        # phase-tolerant best local match within [-window_back_steps, +window_fwd_steps]
+        # when configured. Termination/evaluator components always read `ref_state`
+        # above, unaffected by this -- only reward factories bound to
+        # `reward_ref_state` see the windowed match.
+        back = self.config.window_back_steps
+        fwd = self.config.window_fwd_steps
+        if back == 0 and fwd == 0:
+            reward_ref_state = ref_state
+        else:
+            window_step_indices = list(range(-back, fwd + 1))
+            window_size = len(window_step_indices)
+
+            window_offsets = dt * torch.tensor(
+                window_step_indices, device=device, dtype=torch.float32
+            )
+            candidate_times = motion_times.unsqueeze(-1) + window_offsets  # [envs, W]
+            candidate_times = torch.clamp(candidate_times, min=0.0)
+            candidate_times = torch.minimum(
+                candidate_times, motion_lengths.unsqueeze(-1)
+            )
+
+            flat_motion_ids_w = motion_ids.unsqueeze(-1).expand(
+                num_envs, window_size
+            ).reshape(-1)
+            flat_candidate_times = candidate_times.reshape(-1)
+
+            candidate_state = self.env.motion_lib.get_motion_state(
+                flat_motion_ids_w, flat_candidate_times
+            )
+
+            candidate_pos = candidate_state.rigid_body_pos.view(
+                num_envs, window_size, num_bodies, 3
+            ).clone()
+            candidate_pos += offset.unsqueeze(1)  # same terrain-correction offset as future_pos
+            candidate_rot = candidate_state.rigid_body_rot.view(
+                num_envs, window_size, num_bodies, 4
+            )
+            candidate_vel = candidate_state.rigid_body_vel.view(
+                num_envs, window_size, num_bodies, 3
+            )
+            candidate_ang_vel = candidate_state.rigid_body_ang_vel.view(
+                num_envs, window_size, num_bodies, 3
+            )
+            candidate_dof_pos = candidate_state.dof_pos.view(
+                num_envs, window_size, num_dofs
+            )
+            candidate_dof_vel = candidate_state.dof_vel.view(
+                num_envs, window_size, num_dofs
+            )
+
+            # Best local match = lowest whole-pose mean body-position error, the same
+            # metric shape backing gt_error_factory/eval success criteria -- keeps
+            # "which frame counts as matched" consistent with what the eval yardstick
+            # measures.
+            current_pos = ctx.current.rigid_body_pos  # [envs, num_bodies, 3]
+            per_candidate_err = (
+                (candidate_pos - current_pos.unsqueeze(1)).pow(2).sum(-1).sqrt().mean(-1)
+            )  # [envs, W]
+            best_idx = per_candidate_err.argmin(dim=1)  # [envs]
+
+            env_arange = torch.arange(num_envs, device=device)
+            reward_ref_state = RobotState.from_dict(
+                {
+                    "rigid_body_pos": candidate_pos[env_arange, best_idx],
+                    "rigid_body_rot": candidate_rot[env_arange, best_idx],
+                    "rigid_body_vel": candidate_vel[env_arange, best_idx],
+                    "rigid_body_ang_vel": candidate_ang_vel[env_arange, best_idx],
+                    "dof_pos": candidate_dof_pos[env_arange, best_idx],
+                    "dof_vel": candidate_dof_vel[env_arange, best_idx],
+                },
+                state_conversion=StateConversion.COMMON,
+            )
+
+            # Diagnostics: is the window absorbing small noise (offsets near 0) or
+            # systematically pinned at the boundary (window too small / mechanism
+            # being exploited)? Logged only when the window is active. `env.extras`
+            # only exists from `step()` onward (reset there each call) -- populate_context
+            # also runs once during env construction, before any step(), when it doesn't
+            # exist yet -- skip logging in that case, there's nothing to log to.
+            if hasattr(self.env, "extras"):
+                self.env.extras["mimic/window_offset_steps"] = (best_idx - back).float()
+                self.env.extras["mimic/window_at_bound"] = (
+                    (best_idx == 0) | (best_idx == window_size - 1)
+                ).float()
+
+        # Populate the mimic view
+        ctx.mimic = MimicContext(
+            ref_state=ref_state,
+            reward_ref_state=reward_ref_state,
+            future_pos=future_pos,
+            future_rot=future_rot,
+            future_vel=future_vel,
+            future_ang_vel=future_ang_vel,
+            future_dof_pos=future_dof_pos,
+            future_dof_vel=future_dof_vel,
+            anchor_idx=self.env.robot_config.anchor_body_index,
+            ref_lr=ref_lr,
+            motion_source_id=motion_source_id,
+        )
+    
+    def create_visualization_markers(self, headless: bool) -> Dict[str, VisualizationMarkerConfig]:
+        """Create visualization markers for reference poses.
+        
+        Args:
+            headless: If True, returns empty dict.
+            
+        Returns:
+            Dictionary of marker configurations.
+        """
+        if headless:
+            return {}
+        
+        visualization_markers = {}
+        
+        # Standard mimic: visualize all bodies
+        body_names = self.env.robot_config.kinematic_info.body_names
+        
+        body_markers = []
+        for body_name in body_names:
+            if (
+                self.env.robot_config.mimic_small_marker_bodies is not None
+                and body_name in self.env.robot_config.mimic_small_marker_bodies
+            ):
+                body_markers.append(MarkerConfig(size="small"))
+            else:
+                body_markers.append(MarkerConfig(size="regular"))
+        
+        # Red markers for target poses
+        body_markers_red_cfg = VisualizationMarkerConfig(
+            type="sphere", color=(1.0, 0.0, 0.0), markers=body_markers
+        )
+        visualization_markers["body_markers_red"] = body_markers_red_cfg
+        
+        return visualization_markers
+    
+    def get_markers_state(self) -> Dict[str, MarkerState]:
+        """Compute marker positions for reference poses.
+        
+        Returns:
+            Dictionary mapping marker names to MarkerState.
+        """
+        if self.env.simulator.headless:
+            return {}
+        
+        markers_state = {}
+        
+        # Get reference state at current time (access motion_manager via env)
+        ref_state = self.env.motion_lib.get_motion_state(
+            self.env.motion_manager.motion_ids, self.env.motion_manager.motion_times
+        )
+        
+        target_pos = ref_state.rigid_body_pos.clone()
+        target_pos += (
+            self.env.get_spawn_to_ref_pose_offset_with_terrain_height_correction(
+                target_pos
+            )
+        )
+        
+        # Standard mimic: show all body markers in red
+        target_pos = target_pos.view(self.env.num_envs, -1, 3)
+        markers_state["body_markers_red"] = MarkerState(
+            translation=target_pos,
+            orientation=torch.zeros(
+                self.env.num_envs, target_pos.shape[1], 4, device=self.env.device
+            ),
+        )
+        
+        return markers_state

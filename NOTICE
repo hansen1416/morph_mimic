@@ -1,0 +1,59 @@
+MorphMimic
+Copyright 2026 Longzhen Han
+
+This product includes software derived from ProtoMotions
+(https://github.com/NVlabs/ProtoMotions).
+Copyright (c) 2025-2026 The ProtoMotions Developers.
+Licensed under the Apache License, Version 2.0.
+
+Files that come from ProtoMotions keep their original copyright and license headers.
+
+Changes made to ProtoMotions
+----------------------------
+This repository starts from ProtoMotions at commit a87d2f3 (2026-05-03) and changes it as
+follows, as required by section 4(b) of the Apache License, Version 2.0:
+
+* Reduced to the Isaac Gym simulator and the smpl_mor robot. The code for the other
+  simulators, the other robots, the examples and the documentation was removed. The
+  configuration classes of the other simulators are kept so that saved checkpoints
+  still load.
+* Added support for many body shapes in one training run: the smpl_mor robot (128 SMPL
+  body shapes), morphology-aware environments and observations, and the matching
+  changes to the agent, environment, simulator and utility code.
+* Added streamed clip sampling (GlobalClipPool and MotionLibPool), the validation and
+  test evaluators, the experiment files for the paper, and the tools for reference
+  generation, refinement, evaluation and analysis.
+
+44 files that come from ProtoMotions are modified and 38 files are new;
+MODIFICATIONS.md lists them. The other 83 files that come from ProtoMotions are
+unchanged.
+
+Third-party material
+--------------------
+SMPL body models. The 130 files in protomotions/data/assets/mjcf/smpl_mor/ (128 MJCF body
+files, assets.yaml and physics_features.pt) and the 258 files in
+protomotions/data/assets/mjcf/smpl_mor_unseen_inside/ and smpl_mor_unseen_outside/ (128 MJCF
+body files and assets.yaml in each) are derived from the SMPL body model of the Max
+Planck Institute for Intelligent Systems and the Max-Planck-Gesellschaft zur Förderung der
+Wissenschaften e.V. (https://smpl.is.tue.mpg.de/). They are not covered by the Apache License
+of this repository. They are made available with attribution under the terms of the SMPL-Body
+license, the Creative Commons Attribution 4.0 International License
+(https://smpl.is.tue.mpg.de/bodylicense.html, https://creativecommons.org/licenses/by/4.0/).
+Changes made: each MJCF file describes one body shape (one SMPL shape vector, written out with
+SMPLSim) as a MuJoCo model of box, capsule and sphere geometries with densities, joints and
+joint limits for physics simulation. The files contain no mesh, no shape blendshapes and no
+SMPL model files. Creating new bodies requires the SMPL model files and the SMPL Model License
+(non-commercial research), which are not included. If you use these files, please cite:
+M. Loper, N. Mahmood, J. Romero, G. Pons-Moll and M. J. Black, "SMPL: A Skinned Multi-Person
+Linear Model", ACM Transactions on Graphics 34(6), 248:1-248:16, 2015.
+
+Shape coefficients. protomotions/data/assets/all_betas.pt holds the 64 shape coefficient vectors
+sampled for this work (NumPy seed 46). It is covered by the Apache License. The shape vector of
+every body, including those of the two unseen panels, is also listed in its assets.yaml.
+
+Clip identifiers. data/preprocessing/valid_ids_sorted_by_difficulty.txt and data/splits/ list
+HumanML3D clip identifiers with difficulty scores and split hashes. No motion data is included;
+the motions remain under the AMASS (Max-Planck) and HumanML3D terms.
+
+SMPL model files, AMASS, HumanML3D, HUMOS and Isaac Gym are not part of this repository and
+remain under their own terms.

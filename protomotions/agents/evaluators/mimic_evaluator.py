@@ -1,0 +1,922 @@
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026 The ProtoMotions Developers
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+import torch
+import numpy as np
+from typing import Dict, Optional, Tuple, Any
+from torch import Tensor
+import math
+import hashlib
+from dataclasses import dataclass
+
+from protomotions.agents.evaluators.base_evaluator import BaseEvaluator
+from protomotions.agents.evaluators.metrics import MotionMetrics
+from protomotions.components.motion_lib import MotionLib
+from protomotions.agents.evaluators.config import MimicEvaluatorConfig
+from protomotions.envs.motion_manager.mimic_motion_manager import MimicMotionManager
+
+
+MOTION_SOURCE_NAMES = {
+    0: "amass",
+    1: "humos",
+}
+
+
+@dataclass
+class MimicEpisodeContext:
+    """Per-episode-batch state for mimic evaluation."""
+    motion_ids: Tensor       # global motion library IDs (used for motion_manager / physics)
+    local_ids: Tensor        # 0-based indices into MotionMetrics buffers
+    frame_limits: Tensor     # how many frames before clip ends
+
+
+class MimicEvaluator(BaseEvaluator):
+    """Evaluator for Mimic agent's motion tracking performance."""
+
+    def __init__(self, agent: Any, fabric: Any, config: MimicEvaluatorConfig):
+        super().__init__(agent, fabric, config)
+        self._clip_expansion_all_ids: Optional[torch.Tensor] = None
+        self._clip_expansion_id_to_col: Optional[torch.Tensor] = None
+        # Set while evaluating GlobalClipPool's fixed eval holdout (see _evaluate_holdout) --
+        # a holdout probe must never feed back into the training curriculum, otherwise it stops
+        # being a clean generalization measure and leaks eval signal into clip selection.
+        self._skip_weight_update = False
+
+    @property
+    def motion_lib(self) -> MotionLib:
+        """Motion library (from agent)."""
+        return self.agent.motion_lib
+
+    @property
+    def motion_manager(self) -> MimicMotionManager:
+        """Motion manager (from env)."""
+        return self.env.motion_manager
+
+    def _register_plugins(self) -> None:
+        """Register metric computation plugins."""
+        self._register_smoothness_plugin(window_sec=0.4, high_jerk_threshold=6500.0)
+        self._register_action_smoothness_plugin()
+
+    def _create_metrics(
+        self,
+        num_motions: int,
+        motion_num_frames: Tensor,
+        max_eval_steps: int,
+        device=None,
+    ) -> Dict[str, MotionMetrics]:
+        """Create MotionMetrics buffers for trajectory collection (robot state + actions)."""
+        if device is None:
+            device = self.device
+        metrics = {}
+
+        self._add_robot_state_metrics(
+            metrics, num_motions, motion_num_frames, max_eval_steps, device=device
+        )
+
+        num_dofs = self.env.robot_config.kinematic_info.num_dofs
+        metrics["actions"] = MotionMetrics(
+            num_motions, motion_num_frames, max_eval_steps, num_dofs, device=device
+        )
+
+        return metrics
+
+    def _build_clip_expansion_index_legacy_positional(self) -> tuple:
+        """Build (or return cached) tables for expanding motion IDs to all shape variants,
+        using shape-major COLUMN POSITION as clip identity.
+
+        Fallback only, used when `motion_lib.has_clip_identity_metadata()` is False (morphology
+        data that predates the `motion_clip_ids` field). Assumes every shape has the same clips
+        in the same positional order and the same clip count -- breaks (throws or silently
+        misaligns) the moment `motion_lib` holds a partial/ragged clip set, e.g. a resident clip
+        pool. Prefer `MotionLib.build_clip_id_to_motion_ids()` wherever `motion_clip_ids` is
+        available (see `_expand_to_clip_variants`).
+
+        Returns:
+            all_ids: [num_shapes, num_clips] where all_ids[k, i] = global motion ID
+                     for (clip i, shape k).
+            id_to_clip_col: [total_motions] mapping global motion ID → clip column index.
+        """
+        if self._clip_expansion_all_ids is not None:
+            return self._clip_expansion_all_ids, self._clip_expansion_id_to_col
+
+        asset_to_motion_ids = self.motion_lib.build_asset_id_to_motion_ids()
+        shape_lists = list(asset_to_motion_ids.values())
+        all_ids = torch.stack(shape_lists, dim=0)  # [num_shapes, num_clips]
+
+        num_shapes, num_clips = all_ids.shape
+        total = self.motion_lib.num_motions()
+
+        clip_col = torch.arange(num_clips, device=all_ids.device).unsqueeze(0).expand(num_shapes, -1)
+        id_to_clip_col = torch.zeros(total, dtype=torch.long, device=all_ids.device)
+        id_to_clip_col[all_ids.flatten()] = clip_col.flatten()
+
+        self._clip_expansion_all_ids = all_ids
+        self._clip_expansion_id_to_col = id_to_clip_col
+        return all_ids, id_to_clip_col
+
+    def _expand_to_clip_variants_legacy_positional(self, motion_ids: torch.Tensor) -> torch.Tensor:
+        """Expand global motion IDs to ALL shape variants of those clips, via column position.
+
+        Fallback only -- see `_build_clip_expansion_index_legacy_positional`.
+        """
+        if motion_ids.numel() == 0:
+            return motion_ids
+        all_ids, id_to_clip_col = self._build_clip_expansion_index_legacy_positional()
+        unique_clip_cols = id_to_clip_col[motion_ids].unique()
+        return all_ids[:, unique_clip_cols].flatten()
+
+    def _expand_to_clip_variants(self, motion_ids: torch.Tensor) -> torch.Tensor:
+        """Expand global motion IDs to ALL shape variants of those clips.
+
+        If motion_ids contains the ID for (clip_3, shape_A), the result includes
+        all shape variants of clip_3 — (clip_3, shape_A), (clip_3, shape_B), …
+
+        Groups by real `motion_clip_ids` identity when available (correct even for a partial or
+        ragged clip set, e.g. a resident clip pool); falls back to the shape-major positional
+        grid otherwise (morphology data predating `motion_clip_ids`).
+        """
+        if motion_ids.numel() == 0:
+            return motion_ids
+        if not self.motion_lib.has_clip_identity_metadata():
+            return self._expand_to_clip_variants_legacy_positional(motion_ids)
+
+        clip_id_to_motion_ids = self.motion_lib.build_clip_id_to_motion_ids()
+        clip_ids = self.motion_lib.motion_clip_ids
+        unique_clips = {clip_ids[i] for i in motion_ids.detach().cpu().tolist()}
+        return torch.cat([clip_id_to_motion_ids[c] for c in unique_clips]).to(motion_ids.device)
+
+    def _eval_shape_panel_index(self) -> int:
+        """Return a resume-stable index for the current evaluation shape panel."""
+        eval_every = self.config.eval_metrics_every
+        current_epoch = getattr(self.agent, "current_epoch", None)
+        if current_epoch is not None and eval_every is not None and eval_every > 0:
+            return int(current_epoch) // int(eval_every)
+        return int(self.eval_count)
+
+    def _sample_one_shape_per_motion_legacy_positional(self) -> torch.Tensor:
+        """For every unique clip (by column position), pick one rotating shape.
+
+        Fallback only -- see `_build_clip_expansion_index_legacy_positional`. Assumes all shapes
+        have the same clips in the same positional order and the same clip count.
+        """
+        asset_to_motion_ids = self.motion_lib.build_asset_id_to_motion_ids()
+        shape_lists = list(asset_to_motion_ids.values())  # each: [num_clips]
+
+        num_shapes = len(shape_lists)
+        num_clips = shape_lists[0].shape[0]
+
+        # [num_shapes, num_clips]
+        all_ids = torch.stack(shape_lists, dim=0)
+
+        # Stagger clips across shapes in each panel and rotate every clip on the next panel.
+        panel_index = self._eval_shape_panel_index()
+        seed = int(getattr(self.config, "eval_shape_sampling_seed", 42))
+        shape_picks = (
+            torch.arange(num_clips, device=all_ids.device) + seed + panel_index
+        ) % num_shapes
+        clip_idx = torch.arange(num_clips, device=all_ids.device)
+
+        selected = all_ids[shape_picks, clip_idx]
+        return selected.sort().values
+
+    def _sample_one_shape_per_motion(self) -> torch.Tensor:
+        """For every unique clip, pick one deterministic, rotating shape.
+
+        Groups by real `motion_clip_ids` identity when available, so it's correct even against a
+        partial/ragged resident clip pool where clips may have unequal shape counts; falls back
+        to the shape-major positional grid otherwise. A stable per-clip hash staggers the panel
+        across body shapes; the panel index advances the choice by one variant at each scheduled
+        evaluation. This is reproducible across resume because the panel index is derived from the
+        checkpointed training epoch rather than process-local RNG state. Returns sorted global
+        motion IDs -- one per unique clip.
+        """
+        if not self.motion_lib.has_clip_identity_metadata():
+            return self._sample_one_shape_per_motion_legacy_positional()
+
+        clip_id_to_motion_ids = self.motion_lib.build_clip_id_to_motion_ids()
+        panel_index = self._eval_shape_panel_index()
+        seed = int(getattr(self.config, "eval_shape_sampling_seed", 42))
+        selected = []
+        for clip_id, motion_ids in clip_id_to_motion_ids.items():
+            digest = hashlib.sha256(f"{seed}:{clip_id}".encode("utf-8")).digest()
+            offset = int.from_bytes(digest[:8], byteorder="big")
+            pick = (offset + panel_index) % motion_ids.shape[0]
+            selected.append(motion_ids[pick : pick + 1])
+        return torch.cat(selected).sort().values
+
+    def initialize_eval(self) -> Dict:
+        """Initialize evaluation tracking and cache env state for restoration."""
+        total_motions = self.motion_lib.num_motions()
+
+        # Subsample motions to cap GPU memory usage from MotionMetrics tensors.
+        if self.config.eval_one_shape_per_motion and self.motion_lib.has_morphology_metadata():
+            # Cover every clip with one rotating body shape instead of all shapes. Batching below
+            # guarantees the chosen reference is run on the identical morphology asset.
+            self._eval_motion_subset = self._sample_one_shape_per_motion()
+        else:
+            max_eval = self.config.max_eval_motions
+            if max_eval is not None and total_motions > max_eval:
+                perm = torch.randperm(total_motions, device=self.device)[:max_eval].sort().values
+                self._eval_motion_subset = perm
+            else:
+                self._eval_motion_subset = None
+
+        if self._eval_motion_subset is not None:
+            eval_motion_ids = self._eval_motion_subset
+            motion_lengths = self.motion_lib.get_motion_length(eval_motion_ids)
+        else:
+            eval_motion_ids = None
+            motion_lengths = self.motion_lib.get_motion_length(None)
+
+        num_motions = motion_lengths.shape[0]
+        motion_num_frames = (motion_lengths / self.env.dt).floor().long()
+        motion_num_frames = motion_num_frames.clamp(max=self.config.max_eval_steps)
+        self._init_eval_component_buffers(num_motions)
+
+        # Cache env + motion manager state (restored in cleanup_after_evaluation)
+        self._env_snapshot = self.env.save_state()
+        self._cached_motion_ids = self.motion_manager.motion_ids.clone()
+        self._cached_motion_times = self.motion_manager.motion_times.clone()
+
+        return self._create_metrics(
+            num_motions, motion_num_frames, self.config.max_eval_steps
+        )
+
+    def _save_failed_motions(self, failed_motions: list, epoch: int) -> None:
+        """
+        Save list of failed motions to a text file.
+
+        Args:
+            failed_motions: List of motion IDs that failed tracking
+            epoch: Current epoch number
+        """
+        filename = f"failed_motions_epoch_{epoch}_rank_{self.fabric.global_rank}.txt"
+        self._save_list_to_file(failed_motions, filename, subdirectory="failed_motions")
+
+    def _update_motion_sampling_weights(self) -> None:
+        """Update motion sampling weights based on evaluation component failures."""
+        if self._skip_weight_update:
+            return
+        if self._motion_failed is None:
+            return
+
+        # _motion_failed is indexed by local (eval-subset) positions.
+        # Map back to global motion library IDs before updating weights.
+        subset = self._eval_motion_subset  # None if evaluating all motions
+        local_failed = torch.nonzero(self._motion_failed).flatten()
+        local_success = torch.nonzero(~self._motion_failed).flatten()
+
+        if subset is not None:
+            global_failed = subset[local_failed]
+            global_success = subset[local_success]
+        else:
+            global_failed = local_failed
+            global_success = local_success
+
+        # Log the directly-observed failures (pre-expansion) so the file reflects
+        # which (clip, shape) pairs actually failed in this eval cycle.
+        self._save_failed_motions(global_failed.tolist(), self.agent.current_epoch)
+
+        # Propagate curriculum signal to all shape variants of each evaluated clip.
+        # Clip difficulty is intrinsic to the motion, not the body shape, so a clip
+        # that fails under one gender-beta should be up-weighted for all 128 shapes.
+        if self.motion_lib.has_morphology_metadata():
+            global_failed = self._expand_to_clip_variants(global_failed)
+            global_success = self._expand_to_clip_variants(global_success)
+
+        if hasattr(self.motion_lib, "update_global_clip_weights"):
+            # Persistent scoreboard path (GlobalClipPool): the update lands on the vector that
+            # survives resident-set churn and resumes, then gets re-broadcast onto whatever's
+            # currently resident. Uses its own bounded EMA (config.weight_ema_alpha), not the
+            # discount rule below -- see GlobalClipPool.update_global_clip_weights.
+            self.motion_lib.update_global_clip_weights(
+                failed_motion_ids=global_failed,
+                success_motion_ids=global_success,
+            )
+            new_weights = self.motion_lib.project_global_weights_to_resident_motion_weights()
+        else:
+            success_discount = math.pow(
+                self.config.motion_weights_rules.motion_weights_update_success_discount,
+                self.config.eval_metrics_every,
+            )
+            failure_discount = math.pow(
+                self.config.motion_weights_rules.motion_weights_update_failure_discount,
+                self.config.eval_metrics_every,
+            )
+            new_weights = self.env.motion_manager.motion_weights.clone()
+            new_weights[global_success] *= success_discount
+            if failure_discount != 0:
+                new_weights[global_failed] /= failure_discount
+            else:
+                new_weights[global_failed] = 1.0
+        self.env.motion_manager.update_sampling_weights(new_weights)
+
+    def evaluate_episode(self, env_ids: torch.Tensor, max_steps: int) -> None:
+        """Run a single episode batch, optionally with EMA action smoothing.
+
+        When eval_action_ema_alpha is set, actions are low-pass filtered to
+        simulate deployment conditions. Motions that fail under EMA get higher
+        sampling weight, creating curriculum pressure toward smooth policies.
+        """
+        ema_alpha = self.config.eval_action_ema_alpha
+
+        self._on_episode_start(env_ids)
+
+        obs, _ = self.env.reset(env_ids, **self._get_reset_kwargs())
+        obs = self.agent.add_agent_info_to_obs(obs)
+        obs_td = self.agent.obs_dict_to_tensordict(obs)
+
+        prev_actions = None
+
+        for step_idx in range(max_steps):
+            model_outs = self.agent.model(obs_td)
+            actions = model_outs.get("mean_action", model_outs.get("action"))
+
+            # Apply EMA smoothing (deployment simulation)
+            if ema_alpha is not None:
+                if prev_actions is None:
+                    prev_actions = actions.clone()
+                actions = ema_alpha * actions + (1.0 - ema_alpha) * prev_actions
+                prev_actions = actions.clone()
+
+            obs, rewards, dones, terminated, extras = self.env.step(actions)
+            obs = self.agent.add_agent_info_to_obs(obs)
+            obs_td = self.agent.obs_dict_to_tensordict(obs)
+
+            self._check_eval_components(env_ids, step_idx)
+            self._on_episode_step(env_ids, extras, actions)
+
+    def run_evaluation(self) -> None:
+        """Run evaluation across multiple motions."""
+        for batch in self._build_eval_batches():
+            if len(batch) == 3:
+                env_ids, local_ids, actual_ids = batch
+            else:
+                # fixed-motion path: no subset, local == actual
+                env_ids, actual_ids = batch
+                local_ids = actual_ids
+            motion_lengths = self.motion_lib.get_motion_length(actual_ids)
+            max_len = min(
+                (motion_lengths.max() / self.env.dt).floor().long().item(),
+                self.config.max_eval_steps,
+            )
+            # Build episode context before evaluate_episode so hooks can read it
+            self._episode_ctx = MimicEpisodeContext(
+                motion_ids=actual_ids,
+                local_ids=local_ids,
+                frame_limits=(motion_lengths / self.env.dt).floor().long().clamp(
+                    max=self.config.max_eval_steps
+                ),
+            )
+            self.evaluate_episode(env_ids, max_len)
+
+    def _build_eval_batches(self):
+        """Build list of (env_ids, motion_ids) batches to evaluate.
+
+        Returns:
+            List of (env_ids, motion_ids) tuples where motion_ids are indices
+            into self._metrics (0-based within the eval subset).
+        """
+        fixed_motion_ids, first_env_indices = (
+            self.motion_manager.get_unique_fixed_motions()
+        )
+
+        if fixed_motion_ids.numel() > 0:
+            print(f"Only evaluating fixed motions: {fixed_motion_ids}")
+            return [(first_env_indices, fixed_motion_ids)]
+
+        # If we're using a subset, eval_motion_ids maps local index → global motion id.
+        if self._eval_motion_subset is not None:
+            global_ids = self._eval_motion_subset
+            total_eval = global_ids.shape[0]
+        else:
+            global_ids = None
+            total_eval = self.motion_lib.num_motions()
+
+        if (
+            global_ids is not None
+            and self.motion_lib.has_morphology_metadata()
+            and self.motion_manager.env_asset_ids is not None
+        ):
+            return self._build_morphology_matched_eval_batches(global_ids)
+
+        batches = []
+        for start in range(0, total_eval, self.num_envs):
+            end = min(start + self.num_envs, total_eval)
+            # local_ids: 0-based index into the eval subset (used for MotionMetrics)
+            local_ids = torch.arange(start, end, device=self.device)
+            # actual_ids: real motion library IDs (used for physics/motion_manager)
+            actual_ids = global_ids[local_ids] if global_ids is not None else local_ids
+            env_ids = torch.arange(0, local_ids.numel(), device=self.device)
+            print(
+                f"Evaluating motions {start} to {end} "
+                f"(global ids {actual_ids[0].item()}..{actual_ids[-1].item()}), "
+                f"out of total eval set {total_eval}"
+            )
+            batches.append((env_ids, local_ids, actual_ids))
+        return batches
+
+    def _build_morphology_matched_eval_batches(self, global_ids: Tensor):
+        """Schedule every reference motion only on an env with the same morphology asset.
+
+        Simulator assets are fixed per environment. Assigning a chosen shape variant to envs
+        0..N-1 therefore compares almost every reference against the wrong body. Grouping by asset
+        and chunking by the number of compatible envs preserves the one-shape-per-clip memory
+        footprint while making the physical robot/reference pairing exact.
+        """
+        env_asset_ids = tuple(self.motion_manager.env_asset_ids)
+        asset_to_env_ids = {}
+        for env_id, asset_id in enumerate(env_asset_ids):
+            asset_to_env_ids.setdefault(asset_id, []).append(env_id)
+
+        actual_id_list = global_ids.detach().cpu().tolist()
+        motion_asset_ids = self.motion_lib.get_motion_asset_ids(global_ids)
+        pending_by_asset = {}
+        for local_id, (actual_id, asset_id) in enumerate(
+            zip(actual_id_list, motion_asset_ids)
+        ):
+            if asset_id not in asset_to_env_ids:
+                raise RuntimeError(
+                    "Evaluation motion has no environment with a matching morphology asset: "
+                    f"motion_id={actual_id}, asset_id={asset_id!r}."
+                )
+            pending_by_asset.setdefault(asset_id, []).append((local_id, actual_id))
+
+        num_batches = max(
+            math.ceil(len(pending) / len(asset_to_env_ids[asset_id]))
+            for asset_id, pending in pending_by_asset.items()
+        )
+        batches = []
+        for batch_index in range(num_batches):
+            assignments = []
+            for asset_id, pending in pending_by_asset.items():
+                compatible_envs = asset_to_env_ids[asset_id]
+                start = batch_index * len(compatible_envs)
+                chunk = pending[start : start + len(compatible_envs)]
+                assignments.extend(
+                    (env_id, local_id, actual_id)
+                    for env_id, (local_id, actual_id) in zip(compatible_envs, chunk)
+                )
+
+            # Stable env order keeps tensor indexing and logs easy to inspect.
+            assignments.sort(key=lambda assignment: assignment[0])
+            env_ids = torch.tensor(
+                [assignment[0] for assignment in assignments],
+                dtype=torch.long,
+                device=self.device,
+            )
+            local_ids = torch.tensor(
+                [assignment[1] for assignment in assignments],
+                dtype=torch.long,
+                device=self.device,
+            )
+            actual_ids = torch.tensor(
+                [assignment[2] for assignment in assignments],
+                dtype=torch.long,
+                device=self.device,
+            )
+
+            # This assertion guards the exact invariant that sequential batching broke.
+            assigned_motion_assets = self.motion_lib.get_motion_asset_ids(actual_ids)
+            for env_id, motion_asset_id in zip(
+                env_ids.detach().cpu().tolist(), assigned_motion_assets
+            ):
+                if env_asset_ids[env_id] != motion_asset_id:
+                    raise RuntimeError(
+                        "Morphology-mismatched evaluation assignment: "
+                        f"env_id={env_id}, env_asset={env_asset_ids[env_id]!r}, "
+                        f"motion_asset={motion_asset_id!r}."
+                    )
+
+            print(
+                f"Evaluating morphology-matched batch {batch_index + 1}/{num_batches}: "
+                f"{actual_ids.numel()} motions, out of total eval set {global_ids.numel()}"
+            )
+            batches.append((env_ids, local_ids, actual_ids))
+        return batches
+
+    # --- Hook overrides ---
+    
+    def _on_episode_start(self, env_ids: Tensor) -> None:
+        """Set motion_ids/times in the motion manager before reset."""
+        self.motion_manager.motion_ids[env_ids] = self._episode_ctx.motion_ids
+        self.motion_manager.motion_times[env_ids] = 0.0
+    
+    def _get_reset_kwargs(self) -> dict:
+        """Customize env.reset() for mimic evaluation."""
+        return {"sample_flat": True, "disable_motion_resample": True}
+    
+    def _check_eval_components(self, env_ids: Tensor, step_idx: int) -> None:
+        """Filter by frame limits and check failures only for active clips."""
+        still_active = self._episode_ctx.frame_limits > step_idx
+        if still_active.any():
+            active_env_ids = env_ids[still_active]
+            # Use local_ids (0-based within eval subset) for the failure buffers,
+            # which are sized to num_eval_motions, not total motion library size.
+            active_motion_ids = self._episode_ctx.local_ids[still_active]
+            self._check_evaluation_failures(active_env_ids, active_motion_ids)
+
+    def _on_episode_step(self, env_ids: Tensor, extras: Dict, actions: Tensor) -> None:
+        """Collect smoothness metrics each step."""
+        self._record_trajectory_step(
+            self._metrics, extras, env_ids, self._episode_ctx.local_ids, actions
+        )
+
+    def _record_trajectory_step(
+        self,
+        metrics: Dict,
+        extras: Dict,
+        active_env_ids: Tensor,
+        active_motion_ids: Tensor,
+        actions: Tensor,
+    ) -> None:
+        """Record robot state and actions into trajectory buffers for this step."""
+        if "actions" in metrics and actions is not None:
+            metrics["actions"].update(active_motion_ids, actions[active_env_ids].detach())
+
+        for k in metrics.keys():
+            if k == "actions":
+                continue
+            if f"raw/{k}" in extras:
+                metrics[k].update(active_motion_ids, extras[f"raw/{k}"][active_env_ids].detach())
+
+    def _eval_global_motion_ids(self) -> Optional[Tensor]:
+        """Map local evaluation-buffer rows back to global MotionLib ids."""
+        if self._motion_failed is None:
+            return None
+        if self._eval_motion_subset is not None:
+            return self._eval_motion_subset
+        if self._motion_failed.shape[0] == self.motion_lib.num_motions():
+            return torch.arange(
+                self.motion_lib.num_motions(), device=self.device, dtype=torch.long
+            )
+        # Fixed-motion evaluation can use a smaller ad-hoc buffer without a stable
+        # local-to-global map. Skip source slices rather than mislabel rows.
+        return None
+
+    def _compute_source_eval_metrics(self) -> Dict[str, float]:
+        """Split success and component summaries by motion_source_id."""
+        if self._motion_failed is None or self.motion_lib.motion_source_id is None:
+            return {}
+
+        global_motion_ids = self._eval_global_motion_ids()
+        if global_motion_ids is None:
+            return {}
+
+        source_ids = self.motion_lib.get_motion_source_id(global_motion_ids).to(self.device)
+        if source_ids.shape[0] != self._motion_failed.shape[0]:
+            raise RuntimeError(
+                "Evaluation source-id count does not match evaluation result buffers."
+            )
+
+        to_log: Dict[str, float] = {}
+        source_conditioned_failures = torch.zeros_like(self._motion_failed)
+        for source_id, source_name in MOTION_SOURCE_NAMES.items():
+            source_mask = source_ids == source_id
+            if not source_mask.any():
+                continue
+
+            prefix = f"eval_{source_name}"
+            to_log[f"{prefix}/num_motions"] = int(source_mask.sum().item())
+            success_components = self.config.source_success_components.get(source_id)
+            if success_components:
+                source_failures = torch.zeros_like(self._motion_failed)
+                for component_name in success_components:
+                    if component_name not in self._per_component_failures:
+                        raise RuntimeError(
+                            f"Source {source_name!r} success component "
+                            f"{component_name!r} was not evaluated."
+                        )
+                    source_failures |= self._per_component_failures[component_name]
+            else:
+                source_failures = self._motion_failed
+            source_conditioned_failures[source_mask] = source_failures[source_mask]
+            to_log[f"{prefix}/success_rate"] = (
+                1.0 - source_failures[source_mask].float().mean().item()
+            )
+
+            for name, component in self.config.evaluation_components.items():
+                threshold = component.static_params.get("threshold", None)
+                if threshold is not None:
+                    failure_rate = (
+                        self._per_component_failures[name][source_mask]
+                        .float()
+                        .mean()
+                        .item()
+                    )
+                    to_log[f"{prefix}/{name}/failure_rate"] = failure_rate
+
+                step_count = self._component_step_count[name].float()
+                valid = source_mask & (step_count > 0)
+                if not valid.any():
+                    continue
+                mean_per_motion = (
+                    self._component_value_sum[name] / step_count.clamp(min=1)
+                )
+                to_log[f"{prefix}/{name}/mean"] = mean_per_motion[valid].mean().item()
+                to_log[f"{prefix}/{name}/max"] = (
+                    self._component_value_max[name][valid].max().item()
+                )
+                to_log[f"{prefix}/{name}/min"] = (
+                    self._component_value_min[name][valid].min().item()
+                )
+
+        known_source_mask = torch.zeros_like(self._motion_failed)
+        for source_id in MOTION_SOURCE_NAMES:
+            known_source_mask |= source_ids == source_id
+        if known_source_mask.any():
+            to_log["eval/source_conditioned_success_rate"] = (
+                1.0
+                - source_conditioned_failures[known_source_mask].float().mean().item()
+            )
+        return to_log
+
+    def process_eval_results(self) -> Tuple[Dict, Optional[float]]:
+        """Process results, choose the checkpoint score, and update sampling weights."""
+        to_log, evaluated_score = super().process_eval_results()
+        to_log.update(self._compute_source_eval_metrics())
+
+        score_metric = self.config.score_metric
+        if score_metric is not None:
+            if score_metric not in to_log:
+                raise RuntimeError(
+                    f"Configured score_metric {score_metric!r} was not produced. "
+                    f"Available evaluation metrics: {sorted(to_log)}"
+                )
+            metric_value = float(to_log[score_metric])
+            evaluated_score = (
+                metric_value
+                if self.config.score_greater_is_better
+                else -metric_value
+            )
+            to_log["eval/selection_score"] = evaluated_score
+
+        self._update_motion_sampling_weights()
+
+        additional_metrics = self._compute_additional_metrics(self._metrics)
+        to_log.update(additional_metrics)
+
+        if self.fabric.global_rank == 0:
+            if (
+                self.config.save_predicted_motion_lib_every is not None
+                and self.eval_count % self.config.save_predicted_motion_lib_every == 0
+                and self._eval_motion_subset is None  # requires full motion set
+            ):
+                self._save_predicted_motion_lib(self._metrics, epoch=self.agent.current_epoch)
+
+        return to_log, evaluated_score
+
+    def cleanup_after_evaluation(self) -> None:
+        """Restore env and motion manager state after evaluation."""
+        self.motion_manager.motion_ids = self._cached_motion_ids
+        self.motion_manager.motion_times = self._cached_motion_times
+        self.env.restore_state(self._env_snapshot)
+
+        del self._env_snapshot
+        del self._cached_motion_ids
+        del self._cached_motion_times
+        self._eval_motion_subset = None
+        super().cleanup_after_evaluation()
+
+    @torch.no_grad()
+    def evaluate(self) -> Tuple[Dict, Optional[float]]:
+        """Run the normal (curriculum-pool) eval, then -- if the motion_lib has a fixed eval
+        holdout (GlobalClipPool with eval_holdout_size > 0) -- an additional, read-only holdout
+        probe merged into the same log dict under `eval_holdout/*` keys.
+
+        The normal pass drives the curriculum (unchanged); the holdout pass never does (see
+        `_evaluate_holdout`). `self.eval_count` is bumped exactly once, inside `super().evaluate()`.
+        """
+        to_log, evaluated_score = super().evaluate()
+        if getattr(self.motion_lib, "has_eval_holdout", lambda: False)():
+            to_log.update(self._evaluate_holdout())
+        return to_log, evaluated_score
+
+    def _evaluate_holdout(self) -> Dict:
+        """Evaluate GlobalClipPool's fixed, permanently-excluded holdout set.
+
+        Swaps the live MotionLib content to the holdout clips, reuses the exact same
+        initialize/run/process/cleanup sequence `evaluate()` already uses (not duplicated) with
+        curriculum weight updates disabled, then swaps the training resident set back.
+
+        `on_motion_lib_reloaded()`'s own docstring is explicit that it does NOT touch
+        `motion_manager.motion_ids`/`motion_times` -- callers must force a full env reset so every
+        env resamples against the new motion set. Eval only resets the small per-batch subset of
+        envs (`env_ids` in `evaluate_episode`), but `EnvContext` is rebuilt globally on every
+        `env.reset()` call (`mimic_control.py`'s `populate_context` reads
+        `motion_manager.motion_ids` for *all* envs, not just the reset subset) -- so every env
+        outside this batch would otherwise keep its pre-swap motion_ids, which are valid against
+        the (much larger) training resident pool but out of bounds against the (much smaller)
+        holdout set, crashing `motion_lib.get_motion_state()`'s indexing the moment `env.reset()`
+        rebuilds context. Fix: force a full reset of every env right after swapping in the holdout
+        set, exactly like `GlobalClipPoolRebuildCallback` does after a real resident-pool rebuild.
+
+        On the way back out, `agent._force_full_env_reset = True` applies that same fix for
+        training's own resumption: `cleanup_after_evaluation()` restores each env's pre-holdout
+        `motion_ids` (captured before the full reset above), which stay in-bounds against the
+        just-restored training set, but are stale/meaningless for envs not naturally reset before
+        the next rollout -- the flag forces every env to resample cleanly, matching how a real
+        pool rebuild is handled during training.
+        """
+        if not self.config.evaluation_components:
+            return {}
+
+        self.motion_lib.load_eval_holdout()
+        self.env.motion_manager.on_motion_lib_reloaded()
+        all_env_ids = torch.arange(self.env.num_envs, device=self.device)
+        self.env.reset(all_env_ids)
+        self._skip_weight_update = True
+        try:
+            self._metrics = self.initialize_eval()
+            if self._metrics is None:
+                return {}
+            self.run_evaluation()
+            holdout_log, _ = self.process_eval_results()
+        finally:
+            self._skip_weight_update = False
+            self.cleanup_after_evaluation()
+            self.motion_lib.restore_training_resident_set()
+            self.env.motion_manager.on_motion_lib_reloaded()
+            self.agent._force_full_env_reset = True
+
+        def holdout_key(key: str) -> str:
+            if key.startswith("eval/"):
+                return key.replace("eval/", "eval_holdout/", 1)
+            if key.startswith("eval_"):
+                return key.replace("eval_", "eval_holdout_", 1)
+            return key
+
+        return {holdout_key(k): v for k, v in holdout_log.items()}
+
+    def _plot_per_frame_metrics(
+        self, metrics: Dict, actions_storage: list = None
+    ) -> None:
+        """
+        Plot per-frame metrics vs time when evaluating a single motion.
+        Uses base class plotting with custom colors for contact forces.
+
+        Args:
+            metrics: Dictionary of MotionMetrics objects
+            actions_storage: List of action arrays for plotting (optional, currently unused)
+        """
+        # Define custom colors for specific metrics
+        custom_colors = {}
+
+        # Only plot metrics that were actually collected
+        eval_metric_keys = list(self.config.evaluation_components.keys())
+        available_keys = [k for k in eval_metric_keys if k in metrics]
+
+        # Use base class generic plotting with custom colors
+        super()._plot_per_frame_metrics(
+            metrics,
+            keys_to_plot=available_keys if available_keys else None,
+            custom_colors=custom_colors,
+            output_filename="metrics_per_frame_plot.png",
+        )
+
+    def _save_predicted_motion_lib(
+        self, metrics: Dict[str, MotionMetrics], epoch: int
+    ) -> None:
+        """Pack collected predicted metrics and save as a MotionLib-compatible .pt file.
+
+        This creates a "predicted" version of MotionLib where unknown fields are copied
+        from the ground-truth self.motion_lib.
+
+        Args:
+            metrics: Dictionary of MotionMetrics objects containing predicted data
+            epoch: Current epoch number for filename
+        """
+        required_keys = [
+            "dof_pos",
+            "dof_vel",
+            "rigid_body_pos",
+            "rigid_body_rot",
+            "rigid_body_vel",
+            "rigid_body_ang_vel",
+            "rigid_body_contacts",
+        ]
+
+        # Ensure required data exists
+        for k in required_keys:
+            if k not in metrics:
+                raise ValueError(
+                    f"Missing metric '{k}' required to build predicted MotionLib"
+                )
+
+        device = self.device
+        num_motions = self.motion_lib.num_motions()
+
+        motion_num_frames = metrics["dof_pos"].motion_lens.to(device=device).long()
+        assert (
+            motion_num_frames.shape[0] == num_motions
+        ), "motion_num_frames size mismatch"
+
+        lengths_shifted = motion_num_frames.roll(1)
+        lengths_shifted[0] = 0
+        length_starts = lengths_shifted.cumsum(0)
+
+        motion_dt = (
+            torch.ones(num_motions, dtype=torch.float32, device=device) * self.env.dt
+        )
+        motion_lengths = motion_num_frames.to(dtype=torch.float32) * self.env.dt
+
+        def pack_metric(metric_key: str) -> torch.Tensor:
+            data = metrics[metric_key].data
+            per_motion = []
+            for m in range(num_motions):
+                f = motion_num_frames[m].item()
+                f = min(f, data.shape[1])
+                per_motion.append(data[m, :f].detach().clone())
+            return torch.cat(per_motion, dim=0)
+
+        # Build packed tensors matching MotionLib field names
+        dps = pack_metric("dof_pos")  # [total_frames, num_dofs]
+        dvs = pack_metric("dof_vel")  # [total_frames, num_dofs]
+
+        # Rigid body tensors are stored flattened in metrics; reshape to [*, num_bodies, C]
+        num_bodies = self.env.robot_config.kinematic_info.num_bodies
+        gts_flat = pack_metric("rigid_body_pos")  # [total_frames, num_bodies*3]
+        grs_flat = pack_metric("rigid_body_rot")  # [total_frames, num_bodies*4]
+        gvs_flat = pack_metric("rigid_body_vel")  # [total_frames, num_bodies*3]
+        gavs_flat = pack_metric("rigid_body_ang_vel")  # [total_frames, num_bodies*3]
+
+        # Validate and reshape
+        assert (
+            gts_flat.shape[-1] == num_bodies * 3
+        ), f"rigid_body_pos dim mismatch: {gts_flat.shape[-1]} vs {num_bodies*3}"
+        assert (
+            grs_flat.shape[-1] == num_bodies * 4
+        ), f"rigid_body_rot dim mismatch: {grs_flat.shape[-1]} vs {num_bodies*4}"
+        assert (
+            gvs_flat.shape[-1] == num_bodies * 3
+        ), f"rigid_body_vel dim mismatch: {gvs_flat.shape[-1]} vs {num_bodies*3}"
+        assert (
+            gavs_flat.shape[-1] == num_bodies * 3
+        ), f"rigid_body_ang_vel dim mismatch: {gavs_flat.shape[-1]} vs {num_bodies*3}"
+
+        gts = gts_flat.view(-1, num_bodies, 3)
+        grs = grs_flat.view(-1, num_bodies, 4)
+        gvs = gvs_flat.view(-1, num_bodies, 3)
+        gavs = gavs_flat.view(-1, num_bodies, 3)
+
+        # Pack predicted contacts from metrics
+        contacts_data = metrics[
+            "rigid_body_contacts"
+        ].data  # [num_motions, max_frames, num_bodies]
+        contacts_list = []
+        for m in range(num_motions):
+            f = motion_num_frames[m].item()
+            # Clamp to available frames
+            f = min(f, contacts_data.shape[1])
+            # Convert float contacts to bool for consistency with MotionLib format
+            contacts_list.append(contacts_data[m, :f].bool().detach().clone())
+        contacts = torch.cat(contacts_list, dim=0)
+
+        # Copy ground-truth motion weights and files
+        gt_lib = self.motion_lib
+        motion_weights = getattr(
+            gt_lib,
+            "motion_weights",
+            torch.ones(num_motions, dtype=torch.float32, device=device),
+        )
+        motion_files = getattr(
+            gt_lib,
+            "motion_files",
+            tuple([f"predicted_motion_{i}" for i in range(num_motions)]),
+        )
+
+        save_data = {
+            "gts": gts,
+            "grs": grs,
+            "gvs": gvs,
+            "gavs": gavs,
+            "dvs": dvs,
+            "dps": dps,
+            "length_starts": length_starts,
+            "motion_lengths": motion_lengths,
+            "motion_dt": motion_dt,
+            "motion_num_frames": motion_num_frames,
+            "motion_weights": motion_weights,
+            "motion_files": motion_files,
+            "contacts": contacts,  # Always save predicted contacts
+        }
+
+        # create dir if not exists
+        output_dir = self.root_dir / "results"
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        output_path = output_dir / f"predicted_motion_lib_epoch_{epoch}.pt"
+        torch.save(save_data, output_path)
+        print(f"Predicted MotionLib saved to {output_path}")

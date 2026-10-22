@@ -1,0 +1,37 @@
+# DRAFT 2026-10-20. Update the preferred citation when the arXiv version is available.
+cff-version: 1.2.0
+message: "If you use this software, please cite it using the metadata below."
+title: "MorphMimic: Physics-Based Motion Imitation for Diverse Human Body Shapes"
+type: software
+authors:
+  - family-names: Han
+    given-names: Longzhen
+    affiliation: "University of Brighton"
+  - family-names: Farrington-Wheeler
+    given-names: Beck
+    affiliation: "University of Brighton"
+  - family-names: Hussain
+    given-names: Sajjad
+    affiliation: "University of Brighton"
+  - family-names: Baimagambetov
+    given-names: Almas
+    affiliation: "University of Brighton"
+  - family-names: Polatidis
+    given-names: Nikolaos
+    affiliation: "University of Brighton"
+repository-code: "https://github.com/hansen1416/morph_mimic"
+url: "https://hansen1416.github.io/morph_mimic/"
+license: Apache-2.0
+keywords:
+  - physics-based character animation
+  - motion imitation
+  - reinforcement learning
+  - human body shape
+  - humanoid
+references:
+  - type: software
+    title: "ProtoMotions"
+    authors:
+      - name: "The ProtoMotions Developers"
+    repository-code: "https://github.com/NVlabs/ProtoMotions"
+    license: Apache-2.0

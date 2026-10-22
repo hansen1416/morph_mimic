@@ -1,0 +1,61 @@
+{
+  "difficulty": {
+    "num_strata": 100,
+    "sha256": "11cd79379a5c8ce8523540d63fe2a2252a7441184feada80bb27a83932f18719"
+  },
+  "forced_train": {
+    "effective_clip_count_with_mirrored_partners": 286,
+    "requested_clip_count": 150,
+    "requested_ids_sha256": "a80b72b29a939f9a80322fb99fc4dbed701edc0dcbf85a6254ce901c8288470f"
+  },
+  "fractions": {
+    "test": 0.05,
+    "train": 0.9,
+    "validation": 0.05
+  },
+  "grouping": {
+    "mirrored_pair_rule": "M<clip_id> stays with <clip_id> when both exist"
+  },
+  "id_lists": {
+    "test": {
+      "clip_count": 1048,
+      "file": "test_ids.txt",
+      "sha256": "1ee03ab91c9d7c651b13060c7b85f25b7178acd9f2175bc5d2be188b8b31f0e5"
+    },
+    "train": {
+      "clip_count": 18855,
+      "file": "train_ids.txt",
+      "sha256": "e6f86ea37cbede5fd01b781003bc4c9e46b0545b9bffe60f0901139e4680d08b"
+    },
+    "validation": {
+      "clip_count": 1048,
+      "file": "validation_ids.txt",
+      "sha256": "20f6cdfeba0826421c5a2bda57194b3a3a388948d5d4ff19382e39a42d457ae9"
+    }
+  },
+  "manifests": {
+    "test": {
+      "clip_count": 1048,
+      "file": "test_manifest.jsonl",
+      "sha256": "41b77af3aeb13060ceff0d302d27344d14cbf0e94a0457a0c837dd77ea31ff6a"
+    },
+    "train": {
+      "clip_count": 18855,
+      "file": "train_manifest.jsonl",
+      "sha256": "bddfd28bd4457cfd79ede983afad1e9ca602073fdf4ddeb66916fdae844968c1"
+    },
+    "validation": {
+      "clip_count": 1048,
+      "file": "validation_manifest.jsonl",
+      "sha256": "78c7e588a755ac6f5bd243d262bac0846a5114204892db6ffe66781b13440ea8"
+    }
+  },
+  "schema_version": 1,
+  "seed": 42,
+  "source_manifest": {
+    "clip_count": 20951,
+    "sha256": "37b823d1c14700296ce46823d77e088ca88b0e01b373e70c6b4d53ac277fb1c5"
+  },
+  "split_id": "4c1c9d592e3dbeef15abe18cb50a3141820735849414ecc2d8959e9f38502263",
+  "split_version": "hhi_stage2_v1"
+}
