@@ -24,7 +24,7 @@
 
     <div class="links">
       <span class="btn btn-pending">Paper forthcoming</span>
-      <a class="btn" href="https://github.com/hansen1416/ProtoMotions">Code</a>
+      <a class="btn" href="https://github.com/hansen1416/morph_mimic">Code</a>
       <a class="btn" href="#results">Videos</a>
       <a class="btn" href="#evaluation">Evaluation</a>
       <a class="btn" href="#dataset">Dataset</a>
@@ -102,16 +102,19 @@
 
 
   <section id="evaluation">
-    <h2>Three research questions</h2>
-    <ol class="research-questions">
-      <li><strong>RQ1 — Shared tracking:</strong> can one controller track diverse motions across bodies?
-        The held-out test evaluates 1,048 clips with one trained body per clip; the trained-body
-        control crosses 150 training clips with all 128 trained bodies.</li>
-      <li><strong>RQ2 — Unseen-body transfer:</strong> how well does that capability generalise to new
-        body shapes, and where does it fail? Each unseen panel crosses 233 known motion identities
-        with 128 new bodies, retaining every body and failure.</li>
-      <li><strong>RQ3 — Network design and reference quality:</strong> how do temporal MLP, attention,
-        slot/type embeddings and adaLN-Zero compare, and what trade-offs accompany refinement?</li>
+    <h2>Contributions and evaluation</h2>
+    <ol class="contributions">
+      <li><strong>Paired corpus and workflow:</strong> 20,951 clip identities on 128 body
+        configurations (2,681,728 clip/body variants), each identity preserved from generation
+        through simulation and replay.</li>
+      <li><strong>Shared controller:</strong> one temporal slot/type-attention controller with streamed
+        residency, trained directly on 18,855 clips across all 128 bodies.</li>
+      <li><strong>Exposure-separated evaluation:</strong> 1,048 clip-disjoint test clips on trained
+        bodies, and 233 training-split clips replayed on 128 unseen inside-range and 128 unseen
+        outside-range bodies (29,824 clip/body pairs per panel), retaining every body and failure.</li>
+      <li><strong>Design comparison and reference audit:</strong> three-seed comparisons of four network
+        architectures, and a reference-refinement audit of 19,200 development references
+        (150 clips × 128 bodies).</li>
     </ol>
 
     <h3>Tracking and unseen-body results</h3>
@@ -366,18 +369,25 @@
       <a href="https://github.com/EricGuo5513/HumanML3D">HumanML3D</a> clip identities and
       <a href="https://virtualhumans.mpi-inf.mpg.de/humos/">HUMOS</a> shape-conditioned
       generation. Derived motion tensors are not redistributed here; use remains subject to the
-      source datasets' access and licensing conditions. The research code repository is linked
-      below. An archival version, evaluated checkpoints, asset release and generation checksums
-      are needed for a complete reproducibility package.
+      source datasets' access and licensing conditions. The research code, the simulation body
+      models and the evaluated checkpoint are linked below. Reproducing the evaluations requires
+      the motion corpus, or references regenerated with the released pipeline.
     </p>
     <ul>
       <li><strong>Code &amp; pipeline:</strong>
-        <a href="https://github.com/hansen1416/ProtoMotions">github.com/hansen1416/ProtoMotions</a></li>
-      <li><strong>Body-shape definitions &amp; evaluated simulation assets:</strong>
-        <span class="todo-note">release link and access conditions pending</span></li>
-      <li><strong>Trained checkpoint:</strong> <span class="todo-note">link pending</span></li>
-      <li><strong>Motion data and evaluation archive:</strong> access and redistribution arrangements
-        have not yet been specified; no unrestricted derived-data release is claimed.</li>
+        <a href="https://github.com/hansen1416/morph_mimic">github.com/hansen1416/morph_mimic</a>
+        (version v1.0)</li>
+      <li><strong>Body-shape definitions &amp; evaluated simulation assets:</strong> included in the code
+        repository under
+        <a href="https://github.com/hansen1416/morph_mimic/tree/main/protomotions/data/assets">protomotions/data/assets</a>:
+        the 128 trained bodies, the two 128-body unseen panels and their shape coefficients. The body
+        models are derived from SMPL and released with attribution (CC BY 4.0).</li>
+      <li><strong>Trained checkpoint:</strong>
+        <a href="https://huggingface.co/YugoAmaryl/morph-mimic">huggingface.co/YugoAmaryl/morph-mimic</a>
+        (epoch 28,170, CC BY-NC 4.0). The epoch-34,000 checkpoint is not released.</li>
+      <li><strong>Motion data and evaluation archive:</strong> the motion corpus is not distributed; the
+        released pipeline can regenerate references from the source datasets. No unrestricted
+        derived-data release is claimed.</li>
     </ul>
   </section>
 
